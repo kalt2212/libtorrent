@@ -333,6 +333,18 @@ namespace libtorrent::aux {
 	}
 
 	template <typename FileEntry>
+	typename file_pool_impl<FileEntry>::FileHandle file_pool_impl<FileEntry>::peek_file(
+		storage_index_t const st, file_index_t const file_index) const
+	{
+		std::unique_lock<std::mutex> l(m_mutex);
+		auto const& key_view = m_files.template get<0>();
+		auto const i = key_view.find(file_id{st, file_index});
+		if (i == key_view.end())
+			return {};
+		return i->mapping;
+	}
+
+	template <typename FileEntry>
 	typename file_pool_impl<FileEntry>::FileHandle
 	file_pool_impl<FileEntry>::remove_oldest(std::unique_lock<std::mutex>&)
 	{

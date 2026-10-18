@@ -17,6 +17,8 @@ see LICENSE file.
 #include "libtorrent/aux_/numeric_cast.hpp"
 #include "libtorrent/string_view.hpp"
 #include "libtorrent/aux_/file_view_pool.hpp"
+#include "libtorrent/aux_/file_pool.hpp"
+#include "libtorrent/file_storage.hpp"
 #include "libtorrent/aux_/numeric_cast.hpp"
 #include "libtorrent/aux_/storage_utils.hpp"
 #include "libtorrent/aux_/file_pool_impl.hpp"
@@ -771,3 +773,79 @@ TORRENT_TEST(to_file_open_mode)
 	TEST_CHECK(aux::to_file_open_mode(aux::open_mode::write | aux::open_mode::no_atime, false) == (file_open_mode::read_write | file_open_mode::no_atime));
 	TEST_CHECK(aux::to_file_open_mode(aux::open_mode::write, true) == (file_open_mode::read_write | file_open_mode::mmapped));
 }
+
+namespace {
+
+#if TORRENT_HAVE_MAP_VIEW_OF_FILE
+std::shared_ptr<std::mutex> make_unmap_lock(aux::file_view_entry const*)
+{
+	return std::make_shared<std::mutex>();
+}
+// the pool dereferences this to construct its lock, so it must point at
+// something, just like pread_storage's dummy
+int* make_unmap_lock(aux::file_pool_entry const*)
+{
+	static int dummy = 0;
+	return &dummy;
+}
+#endif
+
+template <typename Entry>
+void test_peek_file()
+{
+	std::string const save_path = complete("file_pool_peek");
+
+	file_storage fs;
+	fs.set_piece_length(16 * 1024);
+	fs.add_file("peek/a", 10);
+	fs.add_file("peek/b", 10);
+	fs.add_file("peek/c", 10);
+	fs.set_num_pieces(1);
+	renamed_files const rf;
+	filenames const fn(fs, rf);
+
+	// the pool keeps one slot spare, so this holds two files
+	aux::file_pool_impl<Entry> pool(3);
+	storage_index_t const st{0};
+	auto const open = [&](file_index_t const idx) {
+		return pool.open_file(st,
+			save_path,
+			idx,
+			fn,
+			aux::open_mode::write
+#if TORRENT_HAVE_MAP_VIEW_OF_FILE
+			,
+			make_unmap_lock(static_cast<Entry const*>(nullptr))
+#endif
+		);
+	};
+
+	TEST_CHECK(!pool.peek_file(st, 0_file));
+
+	auto const h0 = open(0_file);
+	TEST_CHECK(h0);
+	TEST_CHECK(pool.peek_file(st, 0_file) == h0);
+	TEST_CHECK(!pool.peek_file(st, 1_file));
+
+	open(1_file);
+	TEST_CHECK(pool.peek_file(st, 0_file) == h0);
+
+	// opening a third file evicts the least recently used one. The peek
+	// above must not have counted as a use
+	open(2_file);
+	TEST_CHECK(!pool.peek_file(st, 0_file));
+	TEST_CHECK(pool.peek_file(st, 1_file));
+	TEST_CHECK(pool.peek_file(st, 2_file));
+
+	pool.release(st, 1_file);
+	TEST_CHECK(!pool.peek_file(st, 1_file));
+	TEST_CHECK(pool.peek_file(st, 2_file));
+
+	pool.release();
+	TEST_CHECK(!pool.peek_file(st, 2_file));
+}
+
+} // anonymous namespace
+
+TORRENT_TEST(file_view_pool_peek_file) { test_peek_file<aux::file_view_entry>(); }
+TORRENT_TEST(file_pool_peek_file) { test_peek_file<aux::file_pool_entry>(); }

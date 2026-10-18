@@ -557,7 +557,9 @@ namespace aux {
 			// when set to true, all data downloaded from peers will be assumed to
 			// be correct, and not tested to match the hashes in the torrent this
 			// is only useful for simulation and testing purposes (typically
-			// combined with disabled_storage)
+			// combined with disabled_storage). The value is captured when a
+			// torrent is added. Changing it later does not affect torrents
+			// that already exist in the session.
 			disable_hash_checks,
 
 			// if this is true, i2p torrents are allowed to also get peers from

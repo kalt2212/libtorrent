@@ -99,6 +99,11 @@ namespace libtorrent::aux {
 
 		std::vector<open_file_state> get_status(storage_index_t st) const;
 
+		// returns the handle if the file is currently open, without opening
+		// it or refreshing its LRU position. An empty handle means it is not
+		// open, or another thread is still opening it
+		FileHandle peek_file(storage_index_t st, file_index_t file_index) const;
+
 		void close_oldest();
 
 	private:

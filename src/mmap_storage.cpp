@@ -85,7 +85,8 @@ error_code translate_error(std::error_code const& err, bool const write)
 } // namespace
 
 
-mmap_storage::mmap_storage(storage_params const& params, aux::file_view_pool& pool)
+mmap_storage::mmap_storage(
+	storage_params const& params, aux::file_view_pool& pool, bool const disable_hash_checks)
 	: m_files(params.files)
 	, m_renamed_files(params.renamed_files)
 	, m_file_priority(params.priorities)
@@ -96,6 +97,7 @@ mmap_storage::mmap_storage(storage_params const& params, aux::file_view_pool& po
 	, m_allocate_files(params.mode == storage_mode_allocate)
 	, m_v1(params.v1)
 	, m_v2(params.v2)
+	, m_disable_hash_checks(disable_hash_checks)
 {
 	TORRENT_ASSERT(files().num_files() > 0);
 	TORRENT_ASSERT(m_v1 || m_v2);
@@ -785,6 +787,45 @@ mmap_storage::mmap_storage(storage_params const& params, aux::file_view_pool& po
 
 			return ret;
 		});
+	}
+
+	void mmap_storage::page_out_piece(piece_index_t const piece, disk_job_flags_t const flags)
+	{
+		char const dummy = 0;
+		storage_error ignore;
+		readwrite(files(),
+			span<char const>{&dummy, files().piece_size(piece)},
+			piece,
+			0,
+			ignore,
+			[this, flags](file_index_t const file_index,
+				std::int64_t const file_offset,
+				span<char const> const buf,
+				storage_error&) {
+				int const len = static_cast<int>(buf.size());
+				if (files().pad_file_at(file_index))
+					return len;
+
+				if (file_index < m_file_priority.end_index()
+					&& m_file_priority[file_index] == dont_download && use_partfile(file_index))
+					return len;
+
+				auto const handle = m_pool.peek_file(storage_index(), file_index);
+				if (!handle || !handle->has_memory_map())
+					return len;
+
+				span<byte const> file_range = handle->range();
+				if (file_range.size() <= file_offset)
+					return len;
+				file_range = file_range.subspan(std::ptrdiff_t(file_offset),
+					std::min(buf.size(), std::ptrdiff_t(file_range.size() - file_offset)));
+
+				if (flags & disk_interface::volatile_read)
+					handle->dont_need(file_range);
+				if (flags & disk_interface::flush_piece)
+					handle->page_out(file_range);
+				return len;
+			});
 	}
 
 	int mmap_storage::hash2(settings_interface const& sett
